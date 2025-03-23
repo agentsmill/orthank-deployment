@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # Backend - Flask API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+    environment:
+      - FLASK_APP=app.app:create_app
+      - FLASK_ENV=development
+      - SECRET_KEY=your_secret_key_here
+      - DATABASE_URL=sqlite:////app/data/orthank.db
+      - DOCUMENT_PROCESSOR_URL=http://document_processor:5000
+    depends_on:
+      - document_processor
+    networks:
+      - orthank_network
+
+  # Document Processor - Serwis przetwarzania dokumentów
+  document_processor:
+    build:
+      context: ./document_processor
+      dockerfile: Dockerfile
+    volumes:
+      - ./document_processor:/app
+      - ./data:/app/storage
+    environment:
+      - STORAGE_DIR=/app/storage
+      - BACKEND_URL=http://backend:5000
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - PYTHONUNBUFFERED=1
+      - DEEP_RESEARCH_DIR=/app/deep-research
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - orthank_network
+
+  # Frontend - React
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000
+    depends_on:
+      - backend
+    networks:
+      - orthank_network
+      
+  # Ollama - lokalne modele AI
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ./ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    networks:
+      - orthank_network
+
+  # Init Service - inicjalizacja bazy danych
+  init:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: >
+      sh -c "
+        echo 'Waiting for backend to be up...' &&
+        sleep 10 &&
+        python -m flask db upgrade &&
+        python scripts/import_teryt_data.py &&
+        echo 'Initialization completed!'
+      "
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+    environment:
+      - FLASK_APP=app.app:create_app
+      - DATABASE_URL=sqlite:////app/data/orthank.db
+      - DATA_DIR=/app/data
+    depends_on:
+      - backend
+    networks:
+      - orthank_network
+
+volumes:
+  data:
+  ollama_data:
+
+networks:
+  orthank_network:
+    driver: bridge
